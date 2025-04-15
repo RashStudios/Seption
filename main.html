@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Comunicación por Audio</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 600px;
+      margin: 2rem auto;
+      padding: 1rem;
+      background-color: #f5f5f5;
+    }
+    h1 { text-align: center; }
+    textarea {
+      width: 100%;
+      height: 100px;
+      margin-bottom: 1rem;
+      padding: 0.5rem;
+      font-size: 1rem;
+    }
+    button {
+      padding: 0.5rem 1rem;
+      font-size: 1rem;
+      margin-bottom: 1rem;
+    }
+    #receivedMessage {
+      margin-top: 1rem;
+      padding: 1rem;
+      background-color: #fff;
+      border: 1px solid #ccc;
+      min-height: 50px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Comunicación por Audio</h1>
+  
+  <div id="transmitter">
+    <h2>Transmisor</h2>
+    <textarea id="message" placeholder="Escribe tu mensaje aquí..."></textarea>
+    <button id="sendBtn">Enviar</button>
+  </div>
+  
+  <div id="receiver">
+    <h2>Receptor</h2>
+    <button id="startListening">Iniciar Recepción</button>
+    <div id="receivedMessage"></div>
+  </div>
+
+  <script>
+    /* 
+      Nota: Este código es un ejemplo muy básico.
+      La idea es asignar a cada carácter un tono específico y reproducirlo secuencialmente.
+      En este ejemplo, cada carácter se convierte en un tono cuya frecuencia es:
+          frecuencia = 400 + (código_char * 5)
+      Así se simula la codificación.
+      La parte de decodificación (escucha y análisis de audio) se realiza de forma muy sencilla
+      usando un AnalyserNode y una FFT, pero en un proyecto real requeriría un sistema robusto.
+    */
+
+    // Parámetros para la transmisión
+    const baseFreq = 400; // Hz de base
+    const freqStep = 5;   // Incremento por cada unidad del código ASCII
+    const toneDuration = 0.15; // Duración de cada tono en segundos
+
+    // Función para reproducir una secuencia de tonos que representan el mensaje
+    async function playMessage(message) {
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      let currentTime = audioCtx.currentTime;
+      
+      for (let char of message) {
+        const charCode = char.charCodeAt(0);
+        const freq = baseFreq + (charCode * freqStep);
+
+        // Crea un oscilador para el tono
+        const oscillator = audioCtx.createOscillator();
+        oscillator.type = "sine";
+        oscillator.frequency.setValueAtTime(freq, currentTime);
+
+        // Conecta el oscilador al destino (altavoces)
+        oscillator.connect(audioCtx.destination);
+
+        // Programa el inicio y la detención del tono
+        oscillator.start(currentTime);
+        oscillator.stop(currentTime + toneDuration);
+
+        // Incrementa el tiempo para el siguiente tono
+        currentTime += toneDuration;
+      }
+    }
+
+    // Función de “envío” que se dispara al hacer clic en el botón
+    document.getElementById("sendBtn").addEventListener("click", () => {
+      const message = document.getElementById("message").value;
+      if (message.trim() !== "") {
+        playMessage(message);
+      } else {
+        alert("Por favor, ingresa un mensaje.");
+      }
+    });
+
+    // ------------------------------
+    // PARTE DE RECEPCIÓN (BÁSICA Y EXPERIMENTAL)
+    // ------------------------------
+    // Esta parte captura audio desde el micrófono e intenta analizar la frecuencia dominante.
+    // La idea es reconstruir el mensaje a partir de los tonos recibidos.
+    // NOTA: Se requiere un algoritmo sofisticado para sincronizar, segmentar y decodificar
+    // adecuadamente, por lo que este ejemplo es solo ilustrativo.
+
+    let listening = false;
+    let receivedMessage = "";
+    let lastDetectionTime = 0;
+    const minInterval = toneDuration * 0.8; // Intervalo aproximado entre tonos
+
+    async function startListening() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert("Tu navegador no soporta getUserMedia.");
+        return;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const source = audioCtx.createMediaStreamSource(stream);
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 2048;
+        source.connect(analyser);
+        const buffer = new Float32Array(analyser.fftSize);
+
+        listening = true;
+        receivedMessage = "";
+        document.getElementById("receivedMessage").textContent = "";
+
+        function analyze() {
+          if (!listening) return;
+          analyser.getFloatTimeDomainData(buffer);
+
+          // Se aplica una transformada de Fourier simple (o se detecta la frecuencia dominante)
+          // Para este ejemplo, usaremos un método muy básico:
+          let maxVal = 0;
+          let maxIndex = 0;
+          for (let i = 0; i < buffer.length; i++) {
+            let val = Math.abs(buffer[i]);
+            if (val > maxVal) {
+              maxVal = val;
+              maxIndex = i;
+            }
+          }
+
+          // Convierte el índice en una frecuencia aproximada:
+          const sampleRate = audioCtx.sampleRate;
+          const freqDetected = maxIndex * sampleRate / analyser.fftSize;
+
+          // Si la amplitud es significativa y transcurrió el tiempo suficiente, asumimos que detectamos un tono:
+          const now = audioCtx.currentTime;
+          if (maxVal > 0.3 && now - lastDetectionTime > minInterval) {
+            // Decodifica la frecuencia: revierte la fórmula freq = baseFreq + (charCode * freqStep)
+            const charCode = Math.round((freqDetected - baseFreq) / freqStep);
+            const char = String.fromCharCode(charCode);
+            receivedMessage += char;
+            document.getElementById("receivedMessage").textContent = receivedMessage;
+            lastDetectionTime = now;
+          }
+
+          requestAnimationFrame(analyze);
+        }
+
+        analyze();
+
+      } catch (err) {
+        console.error("Error al acceder al micrófono:", err);
+        alert("No se pudo acceder al micrófono.");
+      }
+    }
+
+    document.getElementById("startListening").addEventListener("click", () => {
+      if (!listening) {
+        startListening();
+      }
+    });
+
+  </script>
+</body>
+</html>
